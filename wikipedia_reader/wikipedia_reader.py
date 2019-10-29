@@ -6,8 +6,10 @@ import xml.etree.ElementTree as etree
 
 
 class WikipediaReader:
+    PREFIX = "{http://www.mediawiki.org/xml/export-0.10/}"
+
     def __init__(self, b_bz2=True,
-                 prefix = "{http://www.mediawiki.org/xml/export-0.10/}"):
+                 prefix=PREFIX):
         self.b_bz2 = b_bz2
         self.prefix = prefix
         self.len_prefix = len(self.prefix)
@@ -52,6 +54,299 @@ class WikipediaReader:
                         yield elem
                     root.clear()
 
+    @classmethod
+    def get_page_text(cls, page):
+        return page.find(cls.PREFIX + 'revision').find(cls.PREFIX + 'text').text
+
+    @classmethod
+    def get_page_title(cls, page):
+        return page.find(cls.PREFIX + 'title').text
+
+    @classmethod
+    def process_links(cls, text: str):
+        """
+        Process links of type [[link|target]] to remove the square brackets and keep only the target value.
+
+        :param text:
+        :return: processed text
+        """
+        tag_open, tag_close = "[[", "]]"
+        len_tag_open = len(tag_open)
+        len_tag_close = len(tag_close)
+        end = -len_tag_close
+        start = text.find(tag_open)
+        # No links found
+        if start < 0:
+            return text
+
+        while start >= 0:
+            # Look for end of link
+            end = text.find(tag_close, start)
+
+            # Check for '|'
+            cnt = text.count('|', start, end)
+            if cnt > 1:
+                # print(f"Don't know what to do with following text:\n\"{text[start:end+len_tag_close]}\"")
+                start = start + len_tag_open
+            elif cnt == 1:
+                text = text[:start] + text[text.find('|', start)+1:end] + text[end+len_tag_close:]
+            else:
+                text = text[:start] + text[start+len_tag_open:end] + text[end+len_tag_close:]
+
+            # Update start position
+            start = text.find(tag_open, start)
+
+        return text
+
+    # ############################################################
+    # Remove stuff between tags
+    # ############################################################
+    @classmethod
+    def remove_categories(cls, text: str):
+        """
+        Remove categories from Wiki code.
+
+        :param text:
+        :return: processed text
+        """
+        text = cls.remove_tag(text, tag_open='[[Category:', tag_close=']]')
+        text = cls.remove_tag(text, tag_open='[[category:', tag_close=']]')
+        return text
+
+    @classmethod
+    def remove_comments(cls, text: str):
+        """
+        Remove html-style comments from a text.
+
+        :param text:
+        :return: processed text
+        """
+        return cls.remove_tag(text, tag_open='<!--', tag_close='-->')
+
+    @classmethod
+    def remove_curlies(cls, text: str):
+        """
+        Remove stuff between double curly brackets.
+
+        :param text:
+        :return: processed text
+        """
+        return cls.remove_tag(text, tag_open='{{', tag_close='}}')
+
+    @classmethod
+    def remove_files(cls, text: str):
+        """
+        Remove references to files.
+
+        :param text:
+        :return: processed text
+        """
+        return cls.remove_tag(text, tag_open='[[File:', tag_close=']]', alt_open='[[')
+
+    @classmethod
+    def remove_refs(cls, text: str):
+        """
+        Remove references.
+
+        :param text:
+        :return: processed text
+        """
+        return cls.remove_tag(text, tag_open='<ref>', tag_close='</ref>')
+
+    @classmethod
+    def remove_sqbrackets(cls, text: str):
+        """
+        Remove stuff between double square brackets. Note that this will remove all hyperlinks. If you want to simply
+        process hyperlinks to only keep their target value, use "process_links" instead.
+
+        :param text:
+        :return: processed text
+        """
+        return cls.remove_tag(text, tag_open='[[', tag_close=']]')
+
+
+    @classmethod
+    def remove_tag(cls, text: str, tag_open: str, tag_close: str, alt_open: str = None, b_crash=False):
+        """
+        Remove parts from a text enclosed between the specified opening and closing tags.
+
+        :param text:
+        :param tag_open: opening tag
+        :param tag_close: closing tag
+        :param alt_open: alternative opening tag, that is contained between opening and closing tag should cound as
+        an opening tag; this is, e.g., necessary when cleaning up stuff like
+        '[[File: description contains [[a link]] which would mess up code otherwise]]'
+            -> tag_open="[[File:", alt_open="[["
+        :param b_crash: crash if a tag seems to not be closed correctly
+        :return: processed text
+        """
+        if alt_open is None:
+            alt_open = tag_open
+        len_tag_open = len(tag_open)
+        len_tag_close = len(tag_close)
+        end = -len_tag_close
+        start = text.find(tag_open)
+        # No tags found
+        if start < 0:
+            return text
+
+        res = ''
+        while start >= 0:
+            # Update filtered text
+            res += text[end + len_tag_close:start]
+
+            # Update end position (that is, look for closing tag)
+            end = text.find(tag_close, start)
+            # Check this closing tag is indeed the closing tag corresponding to the used opening tag position
+            cnt = text.count(alt_open, start+len_tag_open, end)
+            # If not, go looking for the appropriate closing tag
+            if cnt > 0:
+                while end > -1 and cnt > 0:
+                    prev_end = end+len_tag_close
+                    end = text.find(tag_close, end+len_tag_close)
+                    # Were there extra starts?
+                    cnt += text.count(alt_open, prev_end, end)
+                    cnt -= 1
+                if end == -1:
+                    if b_crash:
+                        raise ValueError(f"Text contains a tag (open: '{tag_open}', close: '{tag_close}') "
+                                         f"that wasn't properly closed.\nStart of problem: "
+                                         f"[{text[start:start+50 if start+50 < len(text) else len(text)]}]")
+                    else:
+                        print(f"Text contains a tag (open: '{tag_open}', close: '{tag_close}') "
+                              f"that wasn't properly closed.\nStart of problem: "
+                              f"[{text[start:start + 50 if start + 50 < len(text) else len(text)]}]")
+                        end = start + len_tag_open
+
+            # Update start position
+            start = text.find(tag_open, end)
+        # Don't forget last part!
+        res += text[end + len_tag_close:]
+
+        return res
+
+    # ############################################################
+    # Remove extra blank lines and lists, and clean up headings
+    # ############################################################
+    @classmethod
+    def remove_extra_blank_lines(cls, text, max_sqns=2):
+        """
+        Remove succesive blank lines.
+
+        :param text: text to process
+        :param max_sqns: maximum length of sequence of linebreaks to keep
+        :return: processed text
+        """
+        prev_break = 0
+        next_break = text.find('\n', prev_break)
+        res = ''
+
+        nb_breaks = 0
+        while next_break >= 0:
+            if not next_break - prev_break == 1:
+                res += text[prev_break:next_break]
+                nb_breaks = 1
+            else:
+                nb_breaks += 1
+                if nb_breaks <= max_sqns:
+                    res += text[prev_break:next_break]
+
+            prev_break = next_break
+            next_break = text.find('\n', prev_break+1)
+        res += text[prev_break:]
+
+        return res
+
+    @classmethod
+    def remove_headers(cls, text):
+        """
+        Remove headers, e.g., '=== See also ===', and replace them by there textual content, e.g., "See also".
+
+        :param text:
+        :return:
+        """
+        prev_break = -1
+        next_break = text.find('\n', prev_break+1)
+        res = ''
+        while next_break >= 0:
+            line = text[prev_break+1:next_break+1]
+            if line.startswith('=') and line.endswith('=\n'):
+                line = cls._remove_header(line)
+            res += line
+
+            prev_break = next_break
+            next_break = text.find('\n', prev_break+1)
+
+        line = text[prev_break+1:]
+        if line.startswith('=') and line.endswith('='):
+            line = cls._remove_header(line)
+
+        res += line
+
+        return res
+
+    @staticmethod
+    def _remove_header(line):
+        b_newline = (line[-1] == '\n')
+
+        # Get heading level
+        lvl = 0
+        for c in line:
+            if c == '=':
+                lvl += 1
+            else:
+                break
+
+        line = line[lvl:-(lvl + (1 if b_newline else 0))].strip()
+        if b_newline:
+            line += '\n'
+
+        return line
+
+    @classmethod
+    def remove_lists(cls, text):
+        """
+        Remove lists. List items are lines starting with '*'
+
+        :param text: text to process
+        :return: processed text
+        """
+        prev_break = -1
+        next_break = text.find('\n', prev_break+1)
+        res = ''
+        while next_break >= 0:
+            line = text[prev_break+1:next_break+1]
+            if not line[0] == '*':
+                res += line
+
+            prev_break = next_break
+            next_break = text.find('\n', prev_break+1)
+        res += text[prev_break+1:]
+
+        return res
+
+    # ############################################################
+    # Combine methods
+    # ############################################################
+    @classmethod
+    def clean(cls, text):
+        text = cls.remove_comments(text)
+        text = cls.remove_categories(text)
+        text = cls.remove_curlies(text)
+        # text = cls.remove_sqbrackets(text)
+        text = cls.remove_files(text)
+        text = cls.process_links(text)
+        text = cls.remove_refs(text)
+
+        text = cls.remove_headers(text)
+        text = cls.remove_lists(text)
+        text = cls.remove_extra_blank_lines(text)
+
+        return text
+
+    # todo: method to replace links by their text
+    # todo: method to replace headers by their text
+
 
 if __name__ == '__main__':
     HOME = os.path.expanduser("~")
@@ -59,5 +354,11 @@ if __name__ == '__main__':
     wr = WikipediaReader()
     page_reader = wr.read_tag(os.path.join(DATA_DIR, "enwiki-20191020-pages-articles-multistream.xml.bz2"))
     for page in page_reader:
-        print(page)
-        print()
+        title = wr.get_page_title(page)
+        if title == "Allen Ginsberg":
+            print(wr.get_page_title(page))
+            print("============================================================")
+            print(wr.get_page_text(page))
+            print("============================================================")
+            print(wr.clean(wr.get_page_text(page)))
+            break
