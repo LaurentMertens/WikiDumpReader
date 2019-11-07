@@ -7,7 +7,10 @@ import xml.etree.ElementTree as etree
 
 class WikipediaReader:
     PREFIX = "{http://www.mediawiki.org/xml/export-0.10/}"
-    MAX_LINK_LENGTH = 250
+    MAX_LINK_LENGTH = 500
+    HTML_ENTS = {'&nbsp;': ' ', '&lt;': '<', '&gt;': '>', '&amp;': '&', '&quot;': '"', '&apos;': "'",
+                 '&cent;': '¢', '&pound;': '£', '&yen;': '¥', '&euro;': '€', '&copy;': '©', '&reg;': '®'}
+    REMOVE_LINE_STARTS = {'*', '#', ':'}
 
     def __init__(self, b_bz2=True,
                  prefix=PREFIX):
@@ -55,14 +58,23 @@ class WikipediaReader:
                         yield elem
                     root.clear()
 
-    def read_page(self, file, b_ignore_disamb=False, b_ignore_redirs=False, min_chars=0):
+    def read_page(self, file,
+                  b_ignore_category=False,
+                  b_ignore_disamb=False,
+                  b_ignore_redirs=False,
+                  b_ignore_template=False,
+                  b_ignore_wikipedia=False,
+                  min_chars=0):
         """
         Convenience method that will return the text of an article
 
         :param file:
+        :param b_ignore_category: ignore category pages
         :param b_ignore_disamb: ignore pages that have '(disambiguation)' in their title; this does not catch all
         disambiguation pages
         :param b_ignore_redirs: ignore redirect pages
+        :param b_ignore_template: ignore template pages
+        :param b_ignore_wikipedia: ignore 'Wikipedia:' pages
         :param min_chars: min number of characters a text should have; if less, article will be skipped
         :return:
         """
@@ -82,12 +94,18 @@ class WikipediaReader:
                     if _tag == 'page':
                         page_title = self.get_page_title(elem)
 
-                        if b_ignore_disamb and page_title.endswith("(disambiguation)"):
+                        if b_ignore_category and page_title.startswith("Category:"):
+                            continue
+                        elif b_ignore_disamb and page_title.endswith("(disambiguation)"):
+                            continue
+                        elif b_ignore_template and page_title.startswith("Template:"):
+                            continue
+                        elif b_ignore_wikipedia and page_title.startswith("Wikipedia:"):
                             continue
                         try:
                             page_text = self.get_page_text(elem)
                             # This actually happens, sometimes...
-                            if page_title is None:
+                            if page_text is None:
                                 continue
                             if b_ignore_redirs and len(page_text) > 9 and page_text[:9].lower() == "#redirect":
                                 continue
@@ -117,9 +135,10 @@ class WikipediaReader:
         :param text:
         :return: processed text
         """
-        tag_open, tag_close = "[[", "]]"
+        tag_open, tag_close, alt_close = "[[", "]]", "]"
         len_tag_open = len(tag_open)
         len_tag_close = len(tag_close)
+        len_alt_close = len(alt_close)
         # end = -len_tag_close
         start = text.find(tag_open)
         # No links found
@@ -129,6 +148,18 @@ class WikipediaReader:
         while start >= 0:
             # Look for end of link
             end = text.find(tag_close, start)
+            # There's an alt end between start and end?
+            end_alt = text.find(alt_close, start, end)
+            # With no matching open?
+            b_alt = False
+            if end_alt > -1:
+                alt_cnts = text.count('[', start+len_tag_open, end_alt)
+                if alt_cnts == 0:
+                    # print("Alt_end seems more appropriate... Taking alt end.")
+                    b_alt = True
+                    end = end_alt
+            end_offset = len_alt_close if b_alt else len_tag_close
+
             b_error = False
             if end == -1:
                 print("No closing tag found for link. Skipping...")
@@ -137,17 +168,26 @@ class WikipediaReader:
                 print("-----")
                 print(f"Article: [{title}]")
                 b_error = True
-            elif end - start > cls.MAX_LINK_LENGTH:
-                print(f"Link too long at {end-start+len_tag_close} characters, skipping...")
-                print("-----")
-                print(text[start:end+len_tag_close])
-                print("-----")
-                print(f"Article: [{title}]")
-                b_error = True
+
+            # Check this closing tag is indeed the closing tag corresponding to the used opening tag position
+            cnt = text.count(tag_open, start+len_tag_open, end)
+            # If not, go looking for the appropriate closing tag
+            if cnt > 0:
+                while end > -1 and cnt > 0:
+                    prev_end = end + end_offset
+                    end = text.find(tag_close, prev_end)
+                    # Were there extra starts?
+                    cnt += text.count(tag_open, prev_end, end)
+                    cnt -= 1
+                if end == -1:
+                    msg = f"Link appears unproperly closed, skipping...\nStart of problem: "\
+                          f"[{text[start:start + 250 if start + 250 < len(text) else len(text)]}]"\
+                          f"\nArticle: [{title}]"
+                    print(msg)
+                    b_error = True
             if b_error:
                 start = text.find(tag_open, start+len_tag_open)
                 continue
-
 
             # Check for '|'
             cnt = text.count('|', start, end)
@@ -155,9 +195,9 @@ class WikipediaReader:
                 # print(f"Don't know what to do with following text:\n\"{text[start:end+len_tag_close]}\"")
                 start = start + len_tag_open
             elif cnt == 1:
-                text = text[:start] + text[text.find('|', start)+1:end] + text[end+len_tag_close:]
+                text = text[:start] + text[text.find('|', start)+1:end] + text[end+end_offset:]
             else:
-                text = text[:start] + text[start+len_tag_open:end] + text[end+len_tag_close:]
+                text = text[:start] + text[start+len_tag_open:end] + text[end+end_offset:]
 
             # Update start position
             start = text.find(tag_open, start)
@@ -192,12 +232,22 @@ class WikipediaReader:
     @classmethod
     def remove_curlies(cls, text: str, title="N/A"):
         """
+        Remove stuff between single curly brackets.
+
+        :param text:
+        :return: processed text
+        """
+        return cls.remove_tag(text, tag_open='{', tag_close='}', title=title)
+
+    @classmethod
+    def remove_dbl_curlies(cls, text: str, title="N/A"):
+        """
         Remove stuff between double curly brackets.
 
         :param text:
         :return: processed text
         """
-        return cls.remove_tag(text, tag_open='{{', tag_close='}}', title=title)
+        return cls.remove_tag(text, tag_open='{{', tag_close='}}', alt_close='}', title=title)
 
     @classmethod
     def remove_files(cls, text: str, title="N/A"):
@@ -208,6 +258,16 @@ class WikipediaReader:
         :return: processed text
         """
         return cls.remove_tag(text, tag_open='[[File:', tag_close=']]', alt_open='[[', title=title)
+
+    @classmethod
+    def remove_font(cls, text: str, title="N/A"):
+        """
+        Remove font tags.
+
+        :param text:
+        :return: processed text
+        """
+        return cls.remove_tag(text, tag_open='<font', tag_close='</font>', title=title)
 
     @classmethod
     def remove_images(cls, text: str, title="N/A"):
@@ -228,6 +288,29 @@ class WikipediaReader:
         :return: processed text
         """
         return cls.remove_tag(text, tag_open='<math', tag_close='</math>', title=title)
+
+    @classmethod
+    def remove_nowiki(cls, text: str, title="N/A"):
+        """
+        Remove nowiki environments.
+
+        :param text:
+        :return: processed text
+        """
+        # Many times their is only one tag, "<nowiki/>". This is taken care of by the second clause.
+        text = cls.remove_tag(text, tag_open='<nowiki>', tag_close='</nowiki>', title=title)
+        text = cls.remove_tag(text, tag_open='<nowiki', tag_close='/>', title=title)
+        return text
+
+    @classmethod
+    def remove_pre(cls, text: str, title="N/A"):
+        """
+        Remove pre environments.
+
+        :param text:
+        :return: processed text
+        """
+        return cls.remove_tag(text, tag_open='<pre', tag_close='</pre>', title=title)
 
     @classmethod
     def remove_refs(cls, text: str, title="N/A"):
@@ -252,7 +335,27 @@ class WikipediaReader:
         return cls.remove_tag(text, tag_open='<source', tag_close='</source>', title=title)
 
     @classmethod
-    def remove_sqbrackets(cls, text: str, title="N/A"):
+    def remove_sub(cls, text: str, title="N/A"):
+        """
+        Remove sub tags.
+
+        :param text:
+        :return: processed text
+        """
+        return cls.remove_tag(text, tag_open='<sub>', tag_close='</sub>', title=title)
+
+    @classmethod
+    def remove_sup(cls, text: str, title="N/A"):
+        """
+        Remove sup tags.
+
+        :param text:
+        :return: processed text
+        """
+        return cls.remove_tag(text, tag_open='<sup>', tag_close='</sup>', title=title)
+
+    @classmethod
+    def remove_dbl_sqbrackets(cls, text: str, title="N/A"):
         """
         Remove stuff between double square brackets. Note that this will remove all hyperlinks. If you want to simply
         process hyperlinks to only keep their target value, use "process_links" instead.
@@ -265,7 +368,7 @@ class WikipediaReader:
 
     @classmethod
     def remove_tag(cls, text: str, tag_open: str, tag_close: str, alt_open: str = None, alt_close: str = '',
-                   b_crash=False, title='N/A'):
+                   b_crash=True, title='N/A'):
         """
         Remove parts from a text enclosed between the specified opening and closing tags.
 
@@ -334,7 +437,7 @@ class WikipediaReader:
                         end = start + len_tag_open
 
             # Update start position
-            prev_start = start
+            # prev_start = start
             start = text.find(tag_open, end)
 
             # Offset end position
@@ -347,9 +450,41 @@ class WikipediaReader:
 
     # ############################################################
     # Remove extra blank lines and lists, and clean up headings
+    # Also, drop everything from "==See Also==" and/or
+    # "==References==
     # ############################################################
     @classmethod
-    def remove_extra_blank_lines(cls, text, max_sqns=2):
+    def cut_bottom(cls, text):
+        """
+        Remove everything from "==See Also==" or "==References==" or some other
+
+        :param text:
+        :return:
+        """
+        prev_break = -1
+        next_break = text.find('\n', prev_break+1)
+        res = ''
+        b_stop = False
+        while next_break >= 0:
+            line = text[prev_break+1:next_break+1]
+            if line.startswith('==') and line.endswith('==\n'):
+                heading = line[2:-3].strip().lower()
+                if heading == 'see also' or heading == "references"\
+                        or heading == 'external links':
+                    b_stop = True
+                    break
+            res += line
+
+            prev_break = next_break
+            next_break = text.find('\n', prev_break+1)
+
+        if not b_stop:
+            res += text[prev_break+1:]
+
+        return res
+
+    @classmethod
+    def remove_blank_lines(cls, text, max_sqns=2):
         """
         Remove succesive blank lines.
 
@@ -378,11 +513,13 @@ class WikipediaReader:
         return res
 
     @classmethod
-    def remove_headers(cls, text):
+    def remove_headers(cls, text, b_delete=False):
         """
-        Remove headers, e.g., '=== See also ===', and replace them by there textual content, e.g., "See also".
+        Remove headers, e.g., '=== See also ==='.
+        If b_replace = True, then replace them by there textual content, e.g., "See also". Else, ignore the line.
 
         :param text:
+        :param b_delete: keep the header title or not?
         :return:
         """
         prev_break = -1
@@ -391,15 +528,16 @@ class WikipediaReader:
         while next_break >= 0:
             line = text[prev_break+1:next_break+1]
             if line.startswith('=') and line.endswith('=\n'):
-                line = cls._remove_header(line)
+                line = '' if b_delete else cls._remove_header(line)
             res += line
 
             prev_break = next_break
             next_break = text.find('\n', prev_break+1)
 
+        # Don't forget last line!
         line = text[prev_break+1:]
         if line.startswith('=') and line.endswith('='):
-            line = cls._remove_header(line)
+            line = '' if b_delete else cls._remove_header(line)
 
         res += line
 
@@ -424,11 +562,105 @@ class WikipediaReader:
         return line
 
     @classmethod
-    def remove_lists(cls, text):
+    def convert_html_ents_etc(cls, text):
         """
-        Remove lists. List items are lines starting with '*'
+        Convert html entities to the value they represent, and remove "''" and "'''", i.e., Wiki codes for
+        bold and italic.
+
+        We create our method instead of using 'str.replace()' so we can replace all entities at once.
+
+        :param text:
+        :return:
+        """
+        buffer = ''
+        res = ''
+
+        b_in = False
+        b_html = False
+        for c in text:
+            if b_in:
+                if b_html:
+                    # Another '&'? Reset buffer!
+                    if c == '&':
+                        res += buffer
+                        buffer = '&'
+                        continue
+
+                    buffer += c
+                    # End of entity
+                    if c == ';':
+                        if buffer in cls.HTML_ENTS:
+                            res += cls.HTML_ENTS[buffer]
+                        else:
+                            res += buffer
+                        b_in = False
+                    # No point in looking further
+                    # Largest html ent is 7 characters long
+                    elif len(buffer) == 7:
+                        b_in = False
+                        res += buffer
+                else:
+                    if c == "'":
+                        buffer += c
+                    else:
+                        if len(buffer) == 1:
+                            res += buffer
+                        res += c
+                        b_in = False
+            elif c == '&':
+                b_in = True
+                b_html = True
+                buffer = c
+            elif c == "'":
+                b_in = True
+                b_html = False
+                buffer = c
+            else:
+                res += c
+
+        return res
+
+    @classmethod
+    def remove_table_lines(cls, text):
+        """
+        Remove lines starting with '|'.
+
+        :param text:
+        :return:
+        """
+        prev_break = -1
+        next_break = text.find('\n', prev_break+1)
+        res = ''
+        while next_break >= 0:
+            line = text[prev_break+1:next_break+1]
+            b_ok = True
+            for c in line:
+                # Ignore leading whitespaces, we're looking for the first non-ws character
+                if c == ' ':
+                    continue
+                else:
+                    b_ok = (c != '|')
+                    break
+
+            if b_ok:
+                res += line
+
+            prev_break = next_break
+            next_break = text.find('\n', prev_break+1)
+
+        # We will assume the last line does not start with '|'...
+        res += text[prev_break+1:]
+
+        return res
+
+    @classmethod
+    def remove_lists_and_indents(cls, text, b_delete=False):
+        """
+        Remove lists. List items are lines starting with '*' (no numbering) or '#' (numbering).
+        Also remove indents -> line starts with ':'.
 
         :param text: text to process
+        :param b_delete: delete lines
         :return: processed text
         """
         prev_break = -1
@@ -436,8 +668,10 @@ class WikipediaReader:
         res = ''
         while next_break >= 0:
             line = text[prev_break+1:next_break+1]
-            if not line[0] == '*':
-                res += line
+            while line and line[0] in cls.REMOVE_LINE_STARTS:
+                line = '' if b_delete else line[1:].lstrip()
+
+            res += line
 
             prev_break = next_break
             next_break = text.find('\n', prev_break+1)
@@ -479,24 +713,48 @@ class WikipediaReader:
         :return: cleaned text
         """
         if b_debug:
+            print("Cutting off bottom...")
+        text = cls.cut_bottom(text)
+        if b_debug:
             print("Removing comments...")
         text = cls.remove_comments(text, title=title)
+        if b_debug:
+            print("Removing nowiki...")
+        text = cls.remove_nowiki(text, title=title)
+        if b_debug:
+            print("Removing pre...")
+        text = cls.remove_pre(text, title=title)
         if b_debug:
             print("Removing refs...")
         text = cls.remove_refs(text, title=title)
         if b_debug:
+            print("Removing sub...")
+        text = cls.remove_sub(text, title=title)
+        if b_debug:
+            print("Removing sup...")
+        text = cls.remove_sup(text, title=title)
+        if b_debug:
             print("Removing math...")
+        # Remove math before curlies!
         text = cls.remove_math(text, title=title)
+        if b_debug:
+            print("Removing font...")
+        text = cls.remove_font(text, title=title)
         if b_debug:
             print("Removing source...")
         text = cls.remove_source(text, title=title)
         if b_debug:
+            print("Removing double curlies...")
+        text = cls.remove_dbl_curlies(text, title=title)
+        if b_debug:
+            print("Removing single curlies...")
+        text = cls.remove_curlies(text, title=title)
+        if b_debug:
+            print("Removing table lines...")
+        text = cls.remove_table_lines(text)
+        if b_debug:
             print("Removing categories...")
         text = cls.remove_categories(text, title=title)
-        if b_debug:
-            print("Removing curlies...")
-        text = cls.remove_curlies(text, title=title)
-        # text = cls.remove_sqbrackets(text)
         if b_debug:
             print("Removing files...")
         # Removing files should be done BEFORE processing links! Otherwise, the opening tags get confused.
@@ -508,19 +766,25 @@ class WikipediaReader:
         if b_debug:
             print("Processing links...")
         text = cls.process_links(text, title=title)
+        if b_debug:
+            print("Removing double squares...")
+        text = cls.remove_dbl_sqbrackets(text, title=title)
 
+        if b_debug:
+            print("Convert html entities and wiki italic etc...")
+        text = cls.convert_html_ents_etc(text)
         if b_debug:
             print("Removing headers...")
         text = cls.remove_headers(text)
         if b_debug:
             print("Removing lists...")
-        text = cls.remove_lists(text)
+        text = cls.remove_lists_and_indents(text)
         if b_debug:
             print("Removing paragraphs...")
         text = cls.remove_paragraphs(text)
         if b_debug:
-            print("Removing extra blank lines...")
-        text = cls.remove_extra_blank_lines(text)
+            print("Removing blank lines...")
+        text = cls.remove_blank_lines(text, max_sqns=1)
 
         return text
 
@@ -545,7 +809,7 @@ if __name__ == '__main__':
     #         break
 
     text = ""
-    with open(os.path.join(DATA_DIR, "Ref_Article_For_Cleaning_-_AI.txt"), 'r') as fin:
+    with open(os.path.join(DATA_DIR, "Ref_Article_For_Cleaning.txt"), 'r') as fin:
         for line in fin:
             text += line
 
