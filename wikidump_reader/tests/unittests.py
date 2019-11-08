@@ -1,8 +1,8 @@
 import unittest
-from wikipedia_reader.wikipedia_reader import WikipediaReader
+from wikidump_reader.wikidump_reader import WikiDumpReader
 
 
-class TestWikipediaReader(unittest.TestCase):
+class TestWikiDumpReader(unittest.TestCase):
     def test_convert_html_ents(self):
         text = "' ' = &nbsp;\n" \
                "< = &lt;\n" \
@@ -31,7 +31,7 @@ class TestWikipediaReader(unittest.TestCase):
                  "® = ®\n" \
                  "this is wiki for italic, and this is bold, and this is both."
 
-        self.assertEqual(target, WikipediaReader.convert_html_ents_etc(text))
+        self.assertEqual(target, WikiDumpReader.convert_html_ents_etc(text))
 
     def test_process_links(self):
         text = "This sentence contains a [[hyperlink|link]]. This one [[too]]. This one doesn't.\n" \
@@ -44,7 +44,7 @@ class TestWikipediaReader(unittest.TestCase):
                  "This is another badly closed one, followed by a correct one.\n" \
                  "This is a link with [brackets] inside."
 
-        self.assertEqual(target, WikipediaReader.process_links(text))
+        self.assertEqual(target, WikiDumpReader.process_links(text))
 
     def test_remove_categories(self):
         text = "Here be some text." + \
@@ -54,26 +54,26 @@ class TestWikipediaReader(unittest.TestCase):
                "\nHere be some other text."
         target = "Here be some text." + \
                  "\n\n\n\nHere be some other text."
-        self.assertEqual(target, WikipediaReader.remove_categories(text))
+        self.assertEqual(target, WikiDumpReader.remove_categories(text))
         self.assertEqual('This string has no categories',
-                         WikipediaReader.remove_categories('This string has no categories'))
+                         WikiDumpReader.remove_categories('This string has no categories'))
 
     def test_remove_comments(self):
         text = "This is a string <!-- a comment! --> containing an HTML style comment.\n" \
                "Actually, it even <!-- another comment! --> has two comments!"
         target = "This is a string  containing an HTML style comment.\n" \
                  "Actually, it even  has two comments!"
-        self.assertEqual(target, WikipediaReader.remove_comments(text))
-        self.assertEqual('This string has no comments', WikipediaReader.remove_comments('This string has no comments'))
+        self.assertEqual(target, WikiDumpReader.remove_comments(text))
+        self.assertEqual('This string has no comments', WikiDumpReader.remove_comments('This string has no comments'))
         self.assertEqual('A comment !',
-                         WikipediaReader.remove_comments('A comment <!-- within <!-- a comment --> -->!'))
+                         WikiDumpReader.remove_comments('A comment <!-- within <!-- a comment --> -->!'))
 
     def test_remove_curlies(self):
         text = "'''Irwin Allen Ginsberg''' ({{ here be something {{IPAc-en|ˈ|ɡ|ɪ|n|z|b|ɜːr|ɡ}} followed by}}; June 3"
         target = "'''Irwin Allen Ginsberg''' (; June 3"
-        self.assertEqual(target, WikipediaReader.remove_dbl_curlies(text))
+        self.assertEqual(target, WikiDumpReader.remove_dbl_curlies(text))
         self.assertEqual('This string has no curlies',
-                         WikipediaReader.remove_dbl_curlies('This string has no curlies'))
+                         WikiDumpReader.remove_dbl_curlies('This string has no curlies'))
 
         text = """{{short description|American poet and philosopher}}
 {{Use mdy dates|date=October 2019}}
@@ -94,33 +94,33 @@ class TestWikipediaReader(unittest.TestCase):
 | signature   = Allen Ginsberg signature.svg
 }}"""
         target = "\n\n"
-        self.assertEqual(target, WikipediaReader.remove_dbl_curlies(text))
+        self.assertEqual(target, WikiDumpReader.remove_dbl_curlies(text))
 
     def test_remove_extra_blank_lines(self):
         text = "This is a\ntext over several\n\n\nlines.\n\n"
         target_1 = "This is a\ntext over several\nlines.\n"
         target_2 = "This is a\ntext over several\n\nlines.\n\n"
-        self.assertEqual(target_1, WikipediaReader.remove_blank_lines(text, max_sqns=1))
-        self.assertEqual(target_2, WikipediaReader.remove_blank_lines(text, max_sqns=2))
+        self.assertEqual(target_1, WikiDumpReader.remove_blank_lines(text, max_sqns=1))
+        self.assertEqual(target_2, WikiDumpReader.remove_blank_lines(text, max_sqns=2))
 
     def test_remove_files(self):
         text = "[[File:Prabhupada's arrival in San Francisco 1967.jpg|thumb|left|Allen Ginsberg's greeting [[A. C. " \
                "Bhaktivedanta Swami Prabhupada]] at [[San Francisco International Airport]]. January 17, 1967]]"
         target = ""
-        self.assertEqual(target, WikipediaReader.remove_files(text))
+        self.assertEqual(target, WikiDumpReader.remove_files(text))
 
     def test_remove_font(self):
         text = "This line contains a <font color=blabla>FONT</font> statement."
         target = "This line contains a  statement."
-        self.assertEqual(target, WikipediaReader.remove_font(text))
+        self.assertEqual(target, WikiDumpReader.remove_font(text))
 
     def test_remove_header(self):
-        self.assertEqual('Header', WikipediaReader.remove_headers('= Header ='))
-        self.assertEqual('Header', WikipediaReader.remove_headers('== Header =='))
-        self.assertEqual('Header', WikipediaReader.remove_headers('==Header=='))
-        self.assertEqual('Header', WikipediaReader.remove_headers('==Header =='))
-        self.assertEqual('', WikipediaReader.remove_headers('==Header ==', b_delete=True))
-        self.assertEqual('Header\nHihihi', WikipediaReader.remove_headers('=== Header   ===\nHihihi'))
+        self.assertEqual('Header', WikiDumpReader.remove_headers('= Header ='))
+        self.assertEqual('Header', WikiDumpReader.remove_headers('== Header =='))
+        self.assertEqual('Header', WikiDumpReader.remove_headers('==Header=='))
+        self.assertEqual('Header', WikiDumpReader.remove_headers('==Header =='))
+        self.assertEqual('', WikiDumpReader.remove_headers('==Header ==', b_delete=True))
+        self.assertEqual('Header\nHihihi', WikiDumpReader.remove_headers('=== Header   ===\nHihihi'))
 
     def test_remove_lists(self):
         text = "This is a line followed by a list.\n" + \
@@ -142,8 +142,8 @@ class TestWikipediaReader(unittest.TestCase):
         target_del = "This is a line followed by a list.\n" + \
                      "A line inbetween lists.\n" + \
                      "A final line"
-        self.assertEqual(target_keep, WikipediaReader.remove_lists_and_indents(text, b_delete=False))
-        self.assertEqual(target_del, WikipediaReader.remove_lists_and_indents(text, b_delete=True))
+        self.assertEqual(target_keep, WikiDumpReader.remove_lists_and_indents(text, b_delete=False))
+        self.assertEqual(target_del, WikiDumpReader.remove_lists_and_indents(text, b_delete=True))
 
     def test_remove_refs(self):
         text = "Ginsberg took part in decades of political protest against everything from the [[Vietnam War]] " + \
@@ -152,6 +152,6 @@ class TestWikipediaReader(unittest.TestCase):
         target = "Ginsberg took part in decades of political protest against everything from the [[Vietnam War]] " + \
                "to the War on Drugs. His poem \"September on Jessore Road\" called attention..."
 
-        self.assertEqual(target, WikipediaReader.remove_refs(text))
+        self.assertEqual(target, WikiDumpReader.remove_refs(text))
         self.assertEqual('This string has no refs',
-                         WikipediaReader.remove_dbl_curlies('This string has no refs'))
+                         WikiDumpReader.remove_dbl_curlies('This string has no refs'))

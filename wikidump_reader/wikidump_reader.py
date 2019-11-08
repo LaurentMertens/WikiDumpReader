@@ -5,7 +5,7 @@ import os
 import xml.etree.ElementTree as etree
 
 
-class WikipediaReader:
+class WikiDumpReader:
     PREFIX = "{http://www.mediawiki.org/xml/export-0.10/}"
     MAX_LINK_LENGTH = 500
     HTML_ENTS = {'&nbsp;': ' ', '&lt;': '<', '&gt;': '>', '&amp;': '&', '&quot;': '"', '&apos;': "'",
@@ -796,7 +796,7 @@ if __name__ == '__main__':
     HOME = os.path.expanduser("~")
     DATA_DIR = os.path.join(HOME, "Work", "Projects", "STDL", "Data", "RadixAI", "WikiDump")
 
-    # wr = WikipediaReader()
+    # wr = WikiDumpReader()
     # page_reader = wr.read_tag(os.path.join(DATA_DIR, "enwiki-20191020-pages-articles-multistream.xml.bz2"))
     # for page in page_reader:
     #     title = wr.get_page_title(page)
@@ -813,7 +813,7 @@ if __name__ == '__main__':
         for line in fin:
             text += line
 
-    wr = WikipediaReader()
+    wr = WikiDumpReader()
     # text = wr.remove_comments(text)
     # text = wr.remove_categories(text)
     # text = wr.remove_files(text)
